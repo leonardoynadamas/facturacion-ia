@@ -8,11 +8,9 @@ from datetime import datetime
 app = FastAPI()
 
 # --- CONFIGURACIÓN DE LA LLAVE ---
-# 1. Primero intenta buscar la llave en la configuración de la Nube (Render)
 api_key = os.environ.get("GOOGLE_API_KEY")
-
-# 2. Si no la encuentra (porque estás en tu laptop), usa esta fija:
 if not api_key:
+    # Tu clave de respaldo para la laptop
     api_key = "AIzaSyD-6ebGMxt-T9KMCoi8l-t5tmOPR2BTrNg" 
 
 genai.configure(api_key=api_key)
@@ -28,15 +26,20 @@ async def procesar(file: UploadFile = File(...), qr_data: str = Form(...)):
         with open(temp_filename, "wb") as buffer:
             buffer.write(content)
 
-        # Usamos el modelo Flash que es rápido y barato
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        # CAMBIO CLAVE: Usamos 'gemini-1.5-flash-latest' que es más seguro
+        try:
+            model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        except:
+            # Si falla, usamos el clásico PRO como respaldo
+            model = genai.GenerativeModel('gemini-pro')
+
         myfile = genai.upload_file(temp_filename)
 
         prompt = f"""
         Actúa como asistente contable. Analiza esta factura.
         Dato extra: {qr_data}
         
-        Responde SOLO con este JSON exacto:
+        Responde SOLO con este JSON exacto (sin tildes en las claves):
         {{
             "ruc": "solo numeros",
             "empresa": "nombre razon social",
@@ -51,12 +54,14 @@ async def procesar(file: UploadFile = File(...), qr_data: str = Form(...)):
         response = model.generate_content([myfile, prompt])
         texto = response.text.replace("```json", "").replace("```", "").strip()
         
-        # Limpieza extra por si la IA habla de más
+        # Limpieza de texto
         inicio = texto.find("{")
         fin = texto.rfind("}") + 1
-        json_str = texto[inicio:fin]
-        
-        datos = json.loads(json_str)
+        if inicio != -1 and fin != -1:
+            json_str = texto[inicio:fin]
+            datos = json.loads(json_str)
+        else:
+            raise Exception("La IA no devolvió un formato válido.")
 
         nueva_fila = {
             "Fecha_Registro": datetime.now().strftime("%d/%m/%Y"),
