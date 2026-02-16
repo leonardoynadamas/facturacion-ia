@@ -10,8 +10,7 @@ app = FastAPI()
 # --- CONFIGURACIÓN ---
 api_key = os.environ.get("GOOGLE_API_KEY")
 if not api_key:
-    # Por si acaso fallara la variable, ponemos una verificación
-    print("¡ADVERTENCIA! No detecto la API Key en el entorno.")
+    print("¡ADVERTENCIA! No detecto la API Key.")
 
 genai.configure(api_key=api_key)
 
@@ -19,13 +18,15 @@ FILE_EXCEL = "mis_facturas.xlsx"
 
 @app.post("/procesar_factura/")
 async def procesar(file: UploadFile = File(...), qr_data: str = Form(...)):
-    temp_filename = f"temp_{file.filename}"
     try:
+        # 1. Leer la imagen directamente en memoria (Sin guardar en disco)
         content = await file.read()
-        with open(temp_filename, "wb") as buffer:
-            buffer.write(content)
-
-        myfile = genai.upload_file(temp_filename)
+        
+        # 2. Preparar el paquete para la IA (Envío Directo)
+        imagen_blob = {
+            "mime_type": file.content_type,
+            "data": content
+        }
 
         prompt = f"""
         Actúa como experto contable. Analiza esta factura.
@@ -42,37 +43,18 @@ async def procesar(file: UploadFile = File(...), qr_data: str = Form(...)):
         }}
         """
 
-        # --- ESTRATEGIA TRIPLE INTENTO ---
-        response = None
-        errores = []
-        
-        # Opción 1: El más moderno y rápido
+        # 3. Intentar con el modelo Flash (Ahora con envío directo)
         try:
-            print("Intento 1: gemini-1.5-flash")
+            print(f"Versión de librería: {genai.__version__}") # Para verificar en los logs
             model = genai.GenerativeModel('gemini-1.5-flash')
-            response = model.generate_content([myfile, prompt])
+            response = model.generate_content([prompt, imagen_blob])
         except Exception as e:
-            errores.append(f"Flash falló: {e}")
-            
-            # Opción 2: La versión específica estable
-            try:
-                print("Intento 2: gemini-1.5-flash-latest")
-                model = genai.GenerativeModel('gemini-1.5-flash-latest')
-                response = model.generate_content([myfile, prompt])
-            except Exception as e:
-                errores.append(f"Flash-Latest falló: {e}")
+            print(f"Flash falló ({e}), intentando con Pro...")
+            model = genai.GenerativeModel('gemini-pro')
+            # Gemini Pro (versión vieja) a veces pide la imagen distinto, pero intentamos igual
+            response = model.generate_content([prompt, imagen_blob])
 
-                # Opción 3: El clásico (Vieja confiable)
-                try:
-                    print("Intento 3: gemini-1.0-pro")
-                    model = genai.GenerativeModel('gemini-1.0-pro')
-                    response = model.generate_content([myfile, prompt])
-                except Exception as e:
-                    errores.append(f"Pro falló: {e}")
-                    raise Exception(f"Fallaron los 3 modelos. Detalles: {errores}")
-
-        # ---------------------------------
-
+        # 4. Procesar respuesta
         texto = response.text.replace("```json", "").replace("```", "").strip()
         inicio = texto.find("{")
         fin = texto.rfind("}") + 1
@@ -81,6 +63,7 @@ async def procesar(file: UploadFile = File(...), qr_data: str = Form(...)):
         else:
             raise Exception("La IA no devolvió datos válidos")
 
+        # 5. Guardar en Excel
         nueva_fila = {
             "Fecha_Registro": datetime.now().strftime("%d/%m/%Y"),
             "RUC": datos.get("ruc"),
@@ -106,8 +89,5 @@ async def procesar(file: UploadFile = File(...), qr_data: str = Form(...)):
         return {"status": "ok", "mensaje": "Factura procesada correctamente"}
 
     except Exception as e:
-        print(f"ERROR FINAL: {e}")
+        print(f"ERROR FATAL: {e}")
         return {"status": "error", "detalle": str(e)}
-    finally:
-        if os.path.exists(temp_filename):
-            os.remove(temp_filename)
