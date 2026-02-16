@@ -7,13 +7,11 @@ from datetime import datetime
 
 app = FastAPI()
 
-# --- CONFIGURACIÓN SEGURA ---
-import os
-# Solo busca la llave en las variables de entorno (Render o tu PC)
+# --- CONFIGURACIÓN ---
 api_key = os.environ.get("GOOGLE_API_KEY")
-
 if not api_key:
-    raise ValueError("¡No se encontró la API Key! Asegúrate de ponerla en Render.")
+    # Por si acaso fallara la variable, ponemos una verificación
+    print("¡ADVERTENCIA! No detecto la API Key en el entorno.")
 
 genai.configure(api_key=api_key)
 
@@ -23,15 +21,12 @@ FILE_EXCEL = "mis_facturas.xlsx"
 async def procesar(file: UploadFile = File(...), qr_data: str = Form(...)):
     temp_filename = f"temp_{file.filename}"
     try:
-        # 1. Guardar imagen temporal
         content = await file.read()
         with open(temp_filename, "wb") as buffer:
             buffer.write(content)
 
-        # 2. Subir a Google
         myfile = genai.upload_file(temp_filename)
 
-        # 3. Instrucciones
         prompt = f"""
         Actúa como experto contable. Analiza esta factura.
         Info QR: {qr_data}
@@ -47,19 +42,37 @@ async def procesar(file: UploadFile = File(...), qr_data: str = Form(...)):
         }}
         """
 
-        # --- AQUÍ ESTÁ EL TRUCO (DOBLE MOTOR) ---
+        # --- ESTRATEGIA TRIPLE INTENTO ---
+        response = None
+        errores = []
+        
+        # Opción 1: El más moderno y rápido
         try:
-            # Intento 1: Usar el modelo Flash (Rápido)
+            print("Intento 1: gemini-1.5-flash")
             model = genai.GenerativeModel('gemini-1.5-flash')
             response = model.generate_content([myfile, prompt])
-        except Exception:
-            # Intento 2: Si falla, usar el modelo Clásico (Seguro)
-            print("Cambiando a modelo de respaldo...")
-            model = genai.GenerativeModel('gemini-pro')
-            response = model.generate_content([myfile, prompt])
-        # ----------------------------------------
+        except Exception as e:
+            errores.append(f"Flash falló: {e}")
+            
+            # Opción 2: La versión específica estable
+            try:
+                print("Intento 2: gemini-1.5-flash-latest")
+                model = genai.GenerativeModel('gemini-1.5-flash-latest')
+                response = model.generate_content([myfile, prompt])
+            except Exception as e:
+                errores.append(f"Flash-Latest falló: {e}")
 
-        # 4. Limpieza de respuesta
+                # Opción 3: El clásico (Vieja confiable)
+                try:
+                    print("Intento 3: gemini-1.0-pro")
+                    model = genai.GenerativeModel('gemini-1.0-pro')
+                    response = model.generate_content([myfile, prompt])
+                except Exception as e:
+                    errores.append(f"Pro falló: {e}")
+                    raise Exception(f"Fallaron los 3 modelos. Detalles: {errores}")
+
+        # ---------------------------------
+
         texto = response.text.replace("```json", "").replace("```", "").strip()
         inicio = texto.find("{")
         fin = texto.rfind("}") + 1
@@ -68,7 +81,6 @@ async def procesar(file: UploadFile = File(...), qr_data: str = Form(...)):
         else:
             raise Exception("La IA no devolvió datos válidos")
 
-        # 5. Guardar en Excel
         nueva_fila = {
             "Fecha_Registro": datetime.now().strftime("%d/%m/%Y"),
             "RUC": datos.get("ruc"),
@@ -94,6 +106,7 @@ async def procesar(file: UploadFile = File(...), qr_data: str = Form(...)):
         return {"status": "ok", "mensaje": "Factura procesada correctamente"}
 
     except Exception as e:
+        print(f"ERROR FINAL: {e}")
         return {"status": "error", "detalle": str(e)}
     finally:
         if os.path.exists(temp_filename):
