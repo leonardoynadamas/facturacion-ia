@@ -10,7 +10,7 @@ app = FastAPI()
 # --- CONFIGURACIÓN SEGURA ---
 import os
 # Solo busca la llave en las variables de entorno (Render o tu PC)
-api_key = os.environ.get("AIzaSyDZLht4yFrhTZyLY_9K28GADIe_pIQfzbU")
+api_key = os.environ.get("GOOGLE_API_KEY")
 
 if not api_key:
     raise ValueError("¡No se encontró la API Key! Asegúrate de ponerla en Render.")
@@ -95,5 +95,6 @@ async def procesar(file: UploadFile = File(...), qr_data: str = Form(...)):
     finally:
         if os.path.exists(temp_filename):
             os.remove(temp_filename)
+
 
 
