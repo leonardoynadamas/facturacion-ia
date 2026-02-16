@@ -16,7 +16,6 @@ if not api_key:
     raise ValueError("¡No se encontró la API Key! Asegúrate de ponerla en Render.")
 
 genai.configure(api_key=api_key)
-# ---------------------------------
 
 FILE_EXCEL = "mis_facturas.xlsx"
 
@@ -24,46 +23,52 @@ FILE_EXCEL = "mis_facturas.xlsx"
 async def procesar(file: UploadFile = File(...), qr_data: str = Form(...)):
     temp_filename = f"temp_{file.filename}"
     try:
-        # 1. Guardar la imagen temporalmente
+        # 1. Guardar imagen temporal
         content = await file.read()
         with open(temp_filename, "wb") as buffer:
             buffer.write(content)
 
-        # 2. CONFIGURACIÓN DEL MODELO (La versión estándar y rápida)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        # 2. Subir a Google
         myfile = genai.upload_file(temp_filename)
 
-        # 3. Instrucciones para la IA
+        # 3. Instrucciones
         prompt = f"""
         Actúa como experto contable. Analiza esta factura.
-        Información adicional del QR: {qr_data}
-        
-        Responde ÚNICAMENTE con este JSON válido (sin texto extra):
+        Info QR: {qr_data}
+        Responde SOLO con este JSON:
         {{
-            "ruc": "solo el numero",
-            "empresa": "nombre de la empresa",
+            "ruc": "solo numeros",
+            "empresa": "nombre empresa",
             "fecha": "YYYY-MM-DD",
-            "descripcion": "resumen de la compra",
+            "descripcion": "resumen item",
             "base": 0.00,
             "igv": 0.00,
             "total": 0.00
         }}
         """
 
-        # 4. Generar respuesta
-        response = model.generate_content([myfile, prompt])
+        # --- AQUÍ ESTÁ EL TRUCO (DOBLE MOTOR) ---
+        try:
+            # Intento 1: Usar el modelo Flash (Rápido)
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            response = model.generate_content([myfile, prompt])
+        except Exception:
+            # Intento 2: Si falla, usar el modelo Clásico (Seguro)
+            print("Cambiando a modelo de respaldo...")
+            model = genai.GenerativeModel('gemini-pro')
+            response = model.generate_content([myfile, prompt])
+        # ----------------------------------------
+
+        # 4. Limpieza de respuesta
         texto = response.text.replace("```json", "").replace("```", "").strip()
-        
-        # Búsqueda inteligente del JSON (por si la IA habla mucho)
         inicio = texto.find("{")
         fin = texto.rfind("}") + 1
         if inicio != -1 and fin != -1:
-            json_str = texto[inicio:fin]
-            datos = json.loads(json_str)
+            datos = json.loads(texto[inicio:fin])
         else:
-            raise Exception("No se encontró información válida en la factura")
+            raise Exception("La IA no devolvió datos válidos")
 
-        # 5. Preparar datos para Excel
+        # 5. Guardar en Excel
         nueva_fila = {
             "Fecha_Registro": datetime.now().strftime("%d/%m/%Y"),
             "RUC": datos.get("ruc"),
@@ -75,7 +80,6 @@ async def procesar(file: UploadFile = File(...), qr_data: str = Form(...)):
             "Total": datos.get("total")
         }
 
-        # 6. Guardar en Excel
         df_nuevo = pd.DataFrame([nueva_fila])
         if os.path.exists(FILE_EXCEL):
             try:
@@ -90,11 +94,7 @@ async def procesar(file: UploadFile = File(...), qr_data: str = Form(...)):
         return {"status": "ok", "mensaje": "Factura procesada correctamente"}
 
     except Exception as e:
-        print(f"Error: {e}")
         return {"status": "error", "detalle": str(e)}
     finally:
         if os.path.exists(temp_filename):
             os.remove(temp_filename)
-
-
-
