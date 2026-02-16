@@ -10,8 +10,7 @@ app = FastAPI()
 # --- CONFIGURACIÓN DE LA LLAVE ---
 api_key = os.environ.get("GOOGLE_API_KEY")
 if not api_key:
-    # Tu clave de respaldo para la laptop
-    api_key = "AIzaSyD-6ebGMxt-T9KMCoi8l-t5tmOPR2BTrNg" 
+    api_key = "AIzaSyD-6ebGMxt-T9KMCoi8l-t5tmOPR2BTrNg" # Tu clave para local
 
 genai.configure(api_key=api_key)
 # ---------------------------------
@@ -22,24 +21,20 @@ FILE_EXCEL = "mis_facturas.xlsx"
 async def procesar(file: UploadFile = File(...), qr_data: str = Form(...)):
     temp_filename = f"temp_{file.filename}"
     try:
+        # 1. Guardar la imagen temporalmente
         content = await file.read()
         with open(temp_filename, "wb") as buffer:
             buffer.write(content)
 
-        # CAMBIO CLAVE: Usamos 'gemini-1.5-flash-latest' que es más seguro
-        try:
-            model = genai.GenerativeModel('gemini-1.5-flash-latest')
-        except:
-            # Si falla, usamos el clásico PRO como respaldo
-            model = genai.GenerativeModel('gemini-pro')
-
+        # 2. Subir archivo a Google
         myfile = genai.upload_file(temp_filename)
 
+        # 3. Preparar las instrucciones
         prompt = f"""
         Actúa como asistente contable. Analiza esta factura.
         Dato extra: {qr_data}
         
-        Responde SOLO con este JSON exacto (sin tildes en las claves):
+        Responde SOLO con este JSON exacto:
         {{
             "ruc": "solo numeros",
             "empresa": "nombre razon social",
@@ -51,10 +46,23 @@ async def procesar(file: UploadFile = File(...), qr_data: str = Form(...)):
         }}
         """
 
-        response = model.generate_content([myfile, prompt])
+        # --- AQUÍ ESTÁ EL BLINDAJE ANTI-ERROR ---
+        # Intentamos primero con el modelo rápido (Flash)
+        try:
+            print("Intentando con Gemini 1.5 Flash...")
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            response = model.generate_content([myfile, prompt])
+        except Exception as e:
+            # Si falla (Error 404), usamos el modelo clásico (Pro) que nunca falla
+            print(f"Flash falló ({e}), cambiando a Gemini Pro...")
+            model = genai.GenerativeModel('gemini-pro')
+            response = model.generate_content([myfile, prompt])
+        # ----------------------------------------
+
+        # 4. Limpieza y guardado
         texto = response.text.replace("```json", "").replace("```", "").strip()
         
-        # Limpieza de texto
+        # Búsqueda inteligente del JSON
         inicio = texto.find("{")
         fin = texto.rfind("}") + 1
         if inicio != -1 and fin != -1:
@@ -74,7 +82,7 @@ async def procesar(file: UploadFile = File(...), qr_data: str = Form(...)):
             "Total": datos.get("total")
         }
 
-        # Guardado en Excel
+        # Guardar en Excel
         df_nuevo = pd.DataFrame([nueva_fila])
         if os.path.exists(FILE_EXCEL):
             try:
@@ -89,7 +97,7 @@ async def procesar(file: UploadFile = File(...), qr_data: str = Form(...)):
         return {"status": "ok", "mensaje": "Factura guardada correctamente"}
 
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error fatal: {e}")
         return {"status": "error", "detalle": str(e)}
     finally:
         if os.path.exists(temp_filename):
