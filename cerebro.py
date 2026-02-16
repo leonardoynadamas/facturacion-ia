@@ -7,11 +7,13 @@ from datetime import datetime
 
 app = FastAPI()
 
-# --- CONFIGURACIÓN DE LA LLAVE ---
-api_key = os.environ.get("GOOGLE_API_KEY")
+# --- CONFIGURACIÓN SEGURA ---
+import os
+# Solo busca la llave en las variables de entorno (Render o tu PC)
+api_key = os.environ.get("AIzaSyBJ8jAlPm0eiv6TMzY1MwypikCOwJKRH7I")
+
 if not api_key:
-    # Tu clave para cuando lo usas en la laptop
-    api_key = "AIzaSyD-6ebGMxt-T9KMCoi8l-t5tmOPR2BTrNg" 
+    raise ValueError("¡No se encontró la API Key! Asegúrate de ponerla en Render.")
 
 genai.configure(api_key=api_key)
 # ---------------------------------
@@ -93,3 +95,4 @@ async def procesar(file: UploadFile = File(...), qr_data: str = Form(...)):
     finally:
         if os.path.exists(temp_filename):
             os.remove(temp_filename)
+
